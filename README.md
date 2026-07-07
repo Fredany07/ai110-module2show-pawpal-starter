@@ -73,23 +73,36 @@ Sample test output:
 ```
 ============================= test session starts ==============================
 platform darwin -- Python 3.9.6, pytest-8.4.2, pluggy-1.6.0
-collected 2 items
+collected 7 items
 
-tests/test_pawpal.py ..                                                  [100%]
+tests/test_pawpal.py .......                                             [100%]
 
-============================== 2 passed in 0.01s ===============================
+============================== 7 passed in 0.02s ===============================
 ```
 
 ## 📐 Smarter Scheduling
 
-> Fill in once you've implemented scheduling logic.
+Phase 3 adds four algorithmic features to the logic layer (`pawpal_system.py`):
 
 | Feature | Method(s) | Notes |
 |---------|-----------|-------|
-| Task sorting | | e.g., by priority, duration |
-| Filtering | | e.g., skip tasks if time runs out |
-| Conflict handling | | e.g., overlapping time slots |
-| Recurring tasks | | e.g., daily vs. weekly |
+| Task sorting | `Scheduler.sort_by_priority()`, `Scheduler.sort_by_time()` | Priority-first (high → low, shorter tasks break ties) *or* chronological by `scheduled_time`; unscheduled tasks sort last. |
+| Filtering | `Owner.filter_tasks(pet_name, status)`, `Scheduler.filter_by_time()` | Narrow the task list by pet and/or completion status (`pending`/`completed`); `filter_by_time()` greedily fits the highest-priority tasks into the available minutes. |
+| Conflict handling | `Scheduler.find_conflicts()` | Sweep-line overlap check: sorts by start time and flags any task whose window overlaps its neighbor's. Returns warning pairs instead of raising. |
+| Recurring tasks | `Task.next_occurrence()`, `Pet.complete_task()` | Completing a `daily`/`weekly` task auto-creates a fresh instance whose `due_date` is advanced with `timedelta` (today + 1 day / + 1 week). |
+
+### Sorting behavior
+- **By priority** — `Scheduler.sort_by_priority()`
+- **By time** — `Scheduler.sort_by_time()` (lambda key over `Task.start_minutes()`)
+
+### Filtering behavior
+- **By pet or completion status** — `Owner.filter_tasks(pet_name=..., status=...)`
+
+### Conflict detection logic
+- **Overlapping time slots** — `Scheduler.find_conflicts()`
+
+### Recurring task logic
+- **Daily / weekly regeneration on completion** — `Pet.complete_task()` → `Task.next_occurrence()`
 
 ## 📸 Demo Walkthrough
 

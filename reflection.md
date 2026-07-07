@@ -23,8 +23,18 @@
 
 **b. Tradeoffs**
 
-- Describe one tradeoff your scheduler makes.
-- Why is that tradeoff reasonable for this scenario?
+One deliberate tradeoff is in **conflict detection** (`Scheduler.find_conflicts()`).
+It sorts tasks by start time and only compares each task against the *next* one
+in that order — an O(n log n) sweep-line check rather than an O(n²) comparison of
+every possible pair. As a result, when three or more tasks all overlap, it reports
+them as a chain of adjacent pairs (A–B, B–C) instead of every combination (A–C too).
+
+This is reasonable for a single owner's daily plan: the task count is small, the
+performance win is minor at this scale, but the *readability* win is real — the
+owner fixes conflicts in chronological order, one neighbor at a time, which mirrors
+how they'd actually rearrange their day. A second tradeoff: recurring tasks advance
+by a fixed `timedelta` (today + 1 day / + 1 week) and don't account for calendar
+skips like "weekdays only," which keeps the logic simple and predictable.
 
 ---
 

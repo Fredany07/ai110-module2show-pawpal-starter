@@ -7,7 +7,11 @@ them by priority, and fits them into the time the owner has available.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import date, timedelta
+
+# How far ahead each recurrence cadence pushes a task's due date.
+_RECUR_DELTAS = {"daily": timedelta(days=1), "weekly": timedelta(weeks=1)}
 
 
 @dataclass
@@ -17,7 +21,9 @@ class Task:
     title: str
     duration_minutes: int
     priority: str = "medium"  # "low" | "medium" | "high"
-    recurring: bool = False
+    scheduled_time: str | None = None  # "HH:MM" 24-hour clock, or None if unscheduled
+    recurring: str = "none"  # "none" | "daily" | "weekly"
+    due_date: date | None = None  # the day this instance is due
     completed: bool = False
 
     _PRIORITY_WEIGHTS = {"low": 1, "medium": 2, "high": 3}
@@ -29,6 +35,32 @@ class Task:
     def mark_complete(self) -> None:
         """Mark this task as done for the day."""
         self.completed = True
+
+    def next_occurrence(self) -> "Task | None":
+        """Return a fresh, uncompleted copy of this task on its next due date.
+
+        Uses ``timedelta`` to advance the due date by one day ("daily") or one
+        week ("weekly"). If the task has no due date yet, we count from today.
+        Returns ``None`` for non-recurring tasks so callers can simply check the
+        result before scheduling a follow-up.
+        """
+        delta = _RECUR_DELTAS.get(self.recurring)
+        if delta is None:
+            return None
+        base = self.due_date or date.today()
+        return replace(self, due_date=base + delta, completed=False)
+
+    def start_minutes(self) -> int | None:
+        """Return the start time as minutes-since-midnight, or None if unscheduled."""
+        if not self.scheduled_time:
+            return None
+        hours, minutes = self.scheduled_time.split(":")
+        return int(hours) * 60 + int(minutes)
+
+    def end_minutes(self) -> int | None:
+        """Return the end time (start + duration) as minutes-since-midnight."""
+        start = self.start_minutes()
+        return None if start is None else start + self.duration_minutes
 
 
 @dataclass
@@ -47,6 +79,20 @@ class Pet:
         """Remove a care task from this pet."""
         if task in self.tasks:
             self.tasks.remove(task)
+
+    def complete_task(self, task: Task) -> Task | None:
+        """Mark a task complete and auto-schedule its next occurrence.
+
+        For a recurring task this appends a fresh instance (advanced by one day
+        or week via :meth:`Task.next_occurrence`) so the chore reappears on its
+        next due date. Returns the newly created follow-up task, or ``None`` if
+        the task was one-off.
+        """
+        task.mark_complete()
+        follow_up = task.next_occurrence()
+        if follow_up is not None:
+            self.add_task(follow_up)
+        return follow_up
 
 
 @dataclass
@@ -77,6 +123,29 @@ class Owner:
             all_tasks.extend(pet.tasks)
         return all_tasks
 
+    def filter_tasks(
+        self, pet_name: str | None = None, status: str | None = None
+    ) -> list[Task]:
+        """Return tasks narrowed by pet and/or completion status.
+
+        pet_name: keep only tasks belonging to the pet with this name (None = any).
+        status:   "completed" or "pending" (None = any).
+        """
+        tasks = self.get_all_tasks()
+        if pet_name is not None:
+            names = {pet.name for pet in self.pets if pet.name == pet_name}
+            tasks = [
+                t
+                for pet in self.pets
+                if pet.name in names
+                for t in pet.tasks
+            ]
+        if status == "completed":
+            tasks = [t for t in tasks if t.completed]
+        elif status == "pending":
+            tasks = [t for t in tasks if not t.completed]
+        return tasks
+
 
 class Scheduler:
     """Builds and explains a daily care plan from a set of tasks."""
@@ -100,6 +169,33 @@ class Scheduler:
             self.tasks,
             key=lambda task: (-task.priority_score(), task.duration_minutes),
         )
+
+    def sort_by_time(self) -> list[Task]:
+        """Return scheduled tasks in chronological order.
+
+        Unscheduled tasks (no start time) are pushed to the end but kept.
+        """
+        return sorted(
+            self.tasks,
+            key=lambda task: (
+                task.start_minutes() is None,  # False (0) sorts before True (1)
+                task.start_minutes() or 0,
+            ),
+        )
+
+    def find_conflicts(self) -> list[tuple[Task, Task]]:
+        """Return pairs of scheduled tasks whose time ranges overlap.
+
+        Uses a sweep-line approach: sort scheduled tasks by start time, then
+        compare each task's end against the next task's start. Two tasks
+        conflict when one starts before the other ends.
+        """
+        scheduled = [t for t in self.sort_by_time() if t.start_minutes() is not None]
+        conflicts: list[tuple[Task, Task]] = []
+        for earlier, later in zip(scheduled, scheduled[1:]):
+            if later.start_minutes() < earlier.end_minutes():
+                conflicts.append((earlier, later))
+        return conflicts
 
     def filter_by_time(self) -> list[Task]:
         """Return the highest-priority tasks that together fit the available minutes."""
@@ -139,5 +235,14 @@ class Scheduler:
             lines.append("Skipped (not enough time):")
             for task in skipped:
                 lines.append(f"  - {task.title} ({task.duration_minutes} min)")
+
+        conflicts = self.find_conflicts()
+        if conflicts:
+            lines.append("⚠️ Time conflicts:")
+            for earlier, later in conflicts:
+                lines.append(
+                    f"  - '{earlier.title}' ({earlier.scheduled_time}) overlaps "
+                    f"'{later.title}' ({later.scheduled_time})"
+                )
 
         return "\n".join(lines)
